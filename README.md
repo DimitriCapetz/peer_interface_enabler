@@ -8,8 +8,8 @@ In order to install this script:
 
 - Enable the Command API interface:
 
-`management api http-commands
-   no shutdown`
+`management api http-commands`
+`   no shutdown`
 
 - Change username, password, peer_switch and device_interface variables at the top of the script to the ones appropriate for your installation. The peer switch IP should be reachable in the default VRF.
          
@@ -19,9 +19,9 @@ In order to install this script:
 
 - The trigger action should be on the operStatus of the interface you are tracking.
       
-`event-handler <name>
-   trigger on-intf <interface> operstatus
-   action bash python /mnt/flash/peer_interface_enabler.py`
+`event-handler <name>`
+`   trigger on-intf <interface> operstatus`
+`   action bash python /mnt/flash/peer_interface_enabler.py`
 
 # Compatibility
 
