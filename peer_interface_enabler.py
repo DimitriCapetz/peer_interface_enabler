@@ -110,7 +110,7 @@ def enable_peer():
       syslog.syslog( device_interface + " is still connected.  Exiting script." )
       sys.exit()
   else:
-    syslog.syslog( device_interface + " is not connected.  Disabling local interface and enabling remote." )
+    syslog.syslog( device_interface + " is not connected.  Removing Vlans from local interface and adding them to remote." )
     disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + device_interface, "switchport trunk allowed vlan none", "end"] )
     enable_peer_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + device_interface, "switchport trunk allowed vlan " + vlan_list, "end"] )
 
