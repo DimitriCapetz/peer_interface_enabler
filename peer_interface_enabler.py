@@ -82,8 +82,9 @@ import time
 local_switch = '127.0.0.1'
 peer_switch = '10.255.255.254'
 username = 'admin'
-password = 'Ast0ndev!'
+password = 'password'
 device_interface = "Ethernet47"
+vlan_list = "2,502-503,606"
 #----------------------------------------------------------------
 
 local_url_string = "https://{}:{}@{}/command-api".format(username,password,local_switch)
@@ -96,14 +97,13 @@ syslog.openlog( 'Peer Interface Enabler', 0, syslog.LOG_LOCAL4 )
 
 # Tune delay to allow for link stabalization
 syslog.syslog( "Waiting for link stabalization...")
-time.sleep(7)
 
 def enable_peer():
   current_status = local_switch_req.runCmds( 1, ["show interfaces " + device_interface + " status"] )
   status = current_status[0]["interfaceStatuses"][device_interface]["linkStatus"]
   if status == "connected":
     syslog.syslog( device_interface + " is currently up.  Waiting to check again..." )
-    time.sleep(3)
+    time.sleep(2)
     updated_status = local_switch_req.runCmds( 1, ["show interfaces " + device_interface + " status"] )
     new_status = updated_status[0]["interfaceStatuses"][device_interface]["linkStatus"]
     if new_status == "connected":
@@ -111,8 +111,8 @@ def enable_peer():
       sys.exit()
   else:
     syslog.syslog( device_interface + " is not connected.  Disabling local interface and enabling remote." )
-    shut_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + device_interface, "shutdown", "end"] )
-    enable_peer_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + device_interface, "no shutdown", "end"] )
+    disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + device_interface, "switchport trunk allowed vlan none", "end"] )
+    enable_peer_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + device_interface, "switchport trunk allowed vlan " + vlan_list, "end"] )
 
 def main():
   try:
