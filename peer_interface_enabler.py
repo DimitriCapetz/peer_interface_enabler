@@ -48,7 +48,7 @@
             management api http-commands
               no shutdown
 
-       - Change username, password, peer_switch and device_interface
+       - Change username, password, peer_switch and switchport
          variables at the top of the script to the ones appropriate 
          for your installation. The peer switch IP should be reachable
          in the default VRF.
@@ -61,7 +61,7 @@
       
            event-handler <name>
              trigger on-intf <interface> operstatus
-             action bash python /mnt/flash/peer_interface_enabler.py
+             action bash python /mnt/flash/peer_interface_enabler.py -s <interface> -v <vlan_list>
 
         
    COMPATIBILITY
@@ -71,6 +71,7 @@
       None known
 """
 
+import argparse
 from jsonrpclib import Server
 import sys
 import syslog
@@ -83,9 +84,16 @@ local_switch = '127.0.0.1'
 peer_switch = '10.255.255.254'
 username = 'admin'
 password = 'password'
-device_interface = "Ethernet47"
-vlan_list = "2,502-503,606"
 #----------------------------------------------------------------
+
+# Pull in Interface pair to configure file from command line argument
+parser = argparse.ArgumentParser(description='Remove Vlans from down interface and apply to peer')
+required_arg = parser.add_argument_group('Required Arguments')
+required_arg.add_argument('-s', '--switchport', dest='switchport', required=True, help='Switchport to apply configuration to', type=str)
+required_arg.add_argument('-v', '--vlans', dest='vlans', required=True, help='Vlans to allow on enabled port', type=str)
+args = parser.parse_args()
+switchport = args.switchport
+vlans = args.vlans
 
 local_url_string = "https://{}:{}@{}/command-api".format(username,password,local_switch)
 local_switch_req = Server( local_url_string )
@@ -95,24 +103,21 @@ peer_switch_req = Server( peer_url_string )
 # Open syslog for log creation
 syslog.openlog( 'Peer Interface Enabler', 0, syslog.LOG_LOCAL4 )
 
-# Tune delay to allow for link stabalization
-syslog.syslog( "Waiting for link stabalization...")
-
 def enable_peer():
-  current_status = local_switch_req.runCmds( 1, ["show interfaces " + device_interface + " status"] )
-  status = current_status[0]["interfaceStatuses"][device_interface]["linkStatus"]
+  current_status = local_switch_req.runCmds( 1, ["show interfaces " + switchport + " status"] )
+  status = current_status[0]["interfaceStatuses"][switchport]["linkStatus"]
   if status == "connected":
-    syslog.syslog( device_interface + " is currently up.  Waiting to check again..." )
+    syslog.syslog( switchport + " is currently up.  Waiting to check again..." )
     time.sleep(2)
-    updated_status = local_switch_req.runCmds( 1, ["show interfaces " + device_interface + " status"] )
-    new_status = updated_status[0]["interfaceStatuses"][device_interface]["linkStatus"]
+    updated_status = local_switch_req.runCmds( 1, ["show interfaces " + switchport + " status"] )
+    new_status = updated_status[0]["interfaceStatuses"][switchport]["linkStatus"]
     if new_status == "connected":
-      syslog.syslog( device_interface + " is still connected.  Exiting script." )
+      syslog.syslog( switchport + " is still connected.  Exiting script." )
       sys.exit()
   else:
-    syslog.syslog( device_interface + " is not connected.  Removing Vlans from local interface and adding them to remote." )
-    disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + device_interface, "switchport trunk allowed vlan none", "end"] )
-    enable_peer_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + device_interface, "switchport trunk allowed vlan " + vlan_list, "end"] )
+    syslog.syslog( switchport + " is not connected.  Removing Vlans from local interface and adding them to remote." )
+    disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + switchport, "switchport trunk allowed vlan none", "end"] )
+    enable_peer_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + switchport, "switchport trunk allowed vlan " + vlans, "end"] )
 
 def main():
   try:
