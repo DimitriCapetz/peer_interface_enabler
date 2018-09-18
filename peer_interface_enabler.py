@@ -80,7 +80,6 @@ import time
 #----------------------------------------------------------------
 # Configuration section
 #----------------------------------------------------------------
-local_switch = '127.0.0.1'
 peer_switch = '10.255.255.254'
 username = 'admin'
 password = 'password'
@@ -95,13 +94,19 @@ args = parser.parse_args()
 switchport = args.switchport
 vlans = args.vlans
 
-local_url_string = "https://{}:{}@{}/command-api".format(username,password,local_switch)
+# Define URL for local eAPI connection. Uses local loopback
+local_url_string = "https://{}:{}@{}/command-api".format(username,password,"127.0.0.1")
 local_switch_req = Server( local_url_string )
-peer_url_string = "https://{}:{}@{}/command-api".format(username,password,peer_switch)
-peer_switch_req = Server( peer_url_string )
 
 # Open syslog for log creation
 syslog.openlog( 'Peer Interface Enabler', 0, syslog.LOG_LOCAL4 )
+
+def peer_setup():
+  # Pull MLAG Peer IP for peer switch eAPI connection if fixed device.
+  mlag_status = local_switch_req.runCmds( 1, ["show mlag"] )
+  peer_switch = mlag_status[0]["peerAddress"]
+  peer_url_string = "https://{}:{}@{}/command-api".format(username,password,peer_switch)
+  peer_switch_req = Server( peer_url_string )
 
 def enable_peer():
   current_status = local_switch_req.runCmds( 1, ["show interfaces " + switchport + " status"] )
@@ -120,6 +125,12 @@ def enable_peer():
     enable_peer_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + switchport, "switchport trunk allowed vlan " + vlans, "end"] )
 
 def main():
+  # Determine mode of device
+  device_info = local_switch_req.runCmds( 1, ["show version"] )
+  device_model = device_info[0]["modelName"]
+  # If device is fixed, determine peer IP.
+  if device_model.startswith('DCS-7280'):
+    peer_setup()
   try:
     enable_peer()
   except:
