@@ -104,7 +104,7 @@ local_url_string = "https://{}:{}@{}/command-api".format(username,password,"127.
 local_switch_req = Server( local_url_string )
 
 # Open syslog for log creation
-syslog.openlog( 'Peer Interface Enabler', 0, syslog.LOG_LOCAL4 )
+syslog.openlog( 'PeerInterfaceEnabler', 0, syslog.LOG_LOCAL4 )
 
 def peer_setup():
   """ Sets up peer JSON-RPC instance based on MLAG Peer IP
@@ -183,8 +183,13 @@ def enable_backup_port(main_port, model):
     if new_link_status == "connected":
       # If primary port is connected, double check to ensure backup is configured.
       syslog.syslog( "Main port " + main_port + " is still connected.  Verifying backup port " + backup_port + " is up and configured..." )
-      backup_int_status = backup_switch_req.runCmds( 1, ["show interfaces " + backup_port + " status"])
-      backup_link_status = backup_int_status[0]["interfaceStatuses"][backup_port]["linkStatus"]
+      try:
+        backup_int_status = backup_switch_req.runCmds( 1, ["show interfaces " + backup_port + " status"])
+        backup_link_status = backup_int_status[0]["interfaceStatuses"][backup_port]["linkStatus"]
+      except:
+        syslog.syslog( "Peer eAPI not reachable.  Assuming peer switch is dead and configuring local interface.")
+        enable_main_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + switchport, "switchport trunk allowed vlan " + vlans, "end"] )
+        raise Exception("peer dead")
       if backup_link_status == "connected":
         # If backup port is up as well, verify backup port has the proper vlans configured and trunked.
         backup_trunk_status = backup_switch_req.runCmds( 1, ["show interfaces " + backup_port + " trunk"] )
@@ -216,13 +221,21 @@ def enable_backup_port(main_port, model):
 
 def main():
   # Determine model of device for chassis / fixed classification
-  device_info = local_switch_req.runCmds( 1, ["show version"] )
-  device_model = device_info[0]["modelName"]
+  try:
+    device_info = local_switch_req.runCmds( 1, ["show version"] )
+    device_model = device_info[0]["modelName"]
+  except:
+    syslog.syslog( "Unable to connect to local eAPI.  Verify eAPI Config.  No changes made.")
+    sys.exit()
   try:
     enable_backup_port(switchport, device_model)
-  except:
-    syslog.syslog( "No changes made." )
-    sys.exit()
+  except Exception as code:
+    code = str(code)
+    if code == "peer dead":
+      syslog.syslog( "Main port " + switchport + " configured because peer was dead.")
+    else:
+      syslog.syslog( "No changes made." )
+      sys.exit()
 
 if __name__ == '__main__':
     main()
