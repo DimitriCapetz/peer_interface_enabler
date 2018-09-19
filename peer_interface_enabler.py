@@ -101,15 +101,35 @@ local_switch_req = Server( local_url_string )
 syslog.openlog( 'Peer Interface Enabler', 0, syslog.LOG_LOCAL4 )
 
 def peer_setup():
+  """ Sets up peer URL based on MLAG Peer IP
+
+      Args:
+          none
+      
+      Returns:
+          switch_req (instance): URL string for eAPI call to Peer
+
+  """
   # Pull MLAG Peer IP for peer switch eAPI connection if fixed device.
   mlag_status = local_switch_req.runCmds( 1, ["show mlag"] )
   peer_switch = mlag_status[0]["peerAddress"]
   peer_url_string = "https://{}:{}@{}/command-api".format(username,password,peer_switch)
-  peer_switch_req = Server( peer_url_string )
+  switch_req = Server( peer_url_string )
+  return switch_req
 
-def enable_peer(main_port, backup_port):
+def enable_fixed_peer(main_port, backup_port, peer_server):
+  """ Checks interface status and moves config to backup interface on MLAG Peer
+
+      Args:
+          main_port (str): Active port to validate
+          backup_port (str): Port to move config to
+          peer_server (instance): JSON-RPC Object for Peer eAPI Calls
+
+  """
+  # Grab current port status to ensure it is down
   current_status = local_switch_req.runCmds( 1, ["show interfaces " + main_port + " status"] )
   status = current_status[0]["interfaceStatuses"][main_port]["linkStatus"]
+  # If port is up, check again in two seconds.  If it reamins up, take no action.
   if status == "connected":
     syslog.syslog( main_port + " is currently up.  Waiting to check again..." )
     time.sleep(2)
@@ -119,9 +139,36 @@ def enable_peer(main_port, backup_port):
       syslog.syslog( main_port + " is still connected.  Exiting script." )
       sys.exit()
   else:
+    # If port is down, remove all vlans from trunk and add vlans to backup interface.
     syslog.syslog( main_port + " is not connected.  Removing Vlans from local interface and adding them to remote." )
     disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + main_port, "switchport trunk allowed vlan none", "end"] )
-    enable_peer_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + backup_port, "switchport trunk allowed vlan " + vlans, "end"] )
+    enable_peer_int = peer_server.runCmds( 1, ["enable", "configure", "interface " + backup_port, "switchport trunk allowed vlan " + vlans, "end"] )
+
+def enable_modular_peer(main_port, backup_port):
+  """ Checks interface status and moves config to backup interface on Peer Slot
+
+      Args:
+          main_port (str): Active port to validate
+          backup_port (str): Port to move config to
+
+  """
+  # Grab current port status to ensure it is down
+  current_status = local_switch_req.runCmds( 1, ["show interfaces " + main_port + " status"] )
+  status = current_status[0]["interfaceStatuses"][main_port]["linkStatus"]
+  # If port is up, check again in two seconds.  If it reamins up, take no action.
+  if status == "connected":
+    syslog.syslog( main_port + " is currently up.  Waiting to check again..." )
+    time.sleep(2)
+    updated_status = local_switch_req.runCmds( 1, ["show interfaces " + main_port + " status"] )
+    new_status = updated_status[0]["interfaceStatuses"][main_port]["linkStatus"]
+    if new_status == "connected":
+      syslog.syslog( main_port + " is still connected.  Exiting script." )
+      sys.exit()
+  else:
+    # If port is down, remove all vlans from trunk and add vlans to backup interface.
+    syslog.syslog( main_port + " is not connected.  Removing Vlans from local interface and adding them to remote." )
+    disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + main_port, "switchport trunk allowed vlan none", "end"] )
+    enable_peer_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + backup_port, "switchport trunk allowed vlan " + vlans, "end"] )
 
 def main():
   # Determine mode of device
@@ -129,15 +176,24 @@ def main():
   device_model = device_info[0]["modelName"]
   # If device is fixed, determine peer IP.
   if device_model.startswith('DCS-7280'):
-    peer_setup()
+    peer_switch_req = peer_setup()
     backup_switchport = switchport
+    try:
+      enable_fixed_peer(switchport, backup_switchport, peer_switch_req)
+    except:
+      sys.exit()
   elif device_model.startswith('DCS-750'):
-    how do I determine peer port on fixed
-
-  try:
-    enable_peer(switchport, backup_switchport)
-  except:
-    sys.exit()
+    port_list = switchport.split("/")
+    port_slot = int(port_list[0][-1])
+    if port_slot % 2 == 0:
+      backup_slot = port_slot - 1
+    else:
+      backup_slot = port_slot + 1
+    backup_switchport = "Ethernet" + str(backup_slot) + "/" + port_list[1]
+    try:
+      enable_modular_peer(switchport, backup_switchport)
+    except:
+      sys.exit()
 
 if __name__ == '__main__':
     main()
