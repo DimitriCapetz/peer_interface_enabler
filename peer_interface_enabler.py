@@ -37,8 +37,9 @@
 """
    DESCRIPTION
      The Peer Interface Enabler tool is used to enable an interface on 
-     a peer switch when a local interface status changes.  This is to 
-     accomadate attached devices which to not adhere to standard protocols.
+     a peer switch or module when a local interface status changes.  This is to 
+     accomadate attached devices which to not adhere to standard protocols and need 
+     active / standby to be managed by the network switch.
 
    INSTALLATION
      In order to install this script:
@@ -48,27 +49,30 @@
             management api http-commands
               no shutdown
 
-       - Change username, password, peer_switch and switchport
-         variables at the top of the script to the ones appropriate 
-         for your installation. The peer switch IP should be reachable
-         in the default VRF.
-         
+       - Change username and  password variables at the top of the script
+         to the ones appropriate for your installation. 
+
    USAGE
 
       - Script should be configured to trigger with an Event Handler.
       - The trigger action should be on the operStatus of the interface
         you are tracking.
+      - The script uses passed arguments as indicated below.
+      - Delay can be tweaked per environment needs.
       
            event-handler <name>
              trigger on-intf <interface> operstatus
              action bash python /mnt/flash/peer_interface_enabler.py -s <interface> -v <vlan_list>
+             delay 1
 
         
    COMPATIBILITY
       This has been tested with EOS 4.20.x using eAPI
 
    LIMITATIONS
-      None known
+      Strict logic is used to determine the backup port to be configured. If the
+      environment does not adhere to this logic, the script will need to be 
+      adjusted.
 """
 
 import argparse
@@ -78,13 +82,13 @@ import syslog
 import time
 
 #----------------------------------------------------------------
-# Configuration section
+# Credential Configuration section
 #----------------------------------------------------------------
 username = 'admin'
 password = 'password'
 #----------------------------------------------------------------
 
-# Pull in Interface pair to configure file from command line argument
+# Pull in interface pair and vlans to configure file from command line argument
 parser = argparse.ArgumentParser(description='Remove Vlans from down interface and apply to peer')
 required_arg = parser.add_argument_group('Required Arguments')
 required_arg.add_argument('-s', '--switchport', dest='switchport', required=True, help='Switchport to apply configuration to', type=str)
@@ -101,13 +105,13 @@ local_switch_req = Server( local_url_string )
 syslog.openlog( 'Peer Interface Enabler', 0, syslog.LOG_LOCAL4 )
 
 def peer_setup():
-  """ Sets up peer URL based on MLAG Peer IP
+  """ Sets up peer JSON-RPC instance based on MLAG Peer IP
 
       Args:
           none
       
       Returns:
-          switch_req (instance): URL string for eAPI call to Peer
+          switch_req (instance): JSON-RPC instance for eAPI call to Peer
 
   """
   # Pull MLAG Peer IP for peer switch eAPI connection if fixed device.
@@ -118,18 +122,20 @@ def peer_setup():
   return switch_req
 
 def enable_fixed_peer(main_port, backup_port, peer_server):
-  """ Checks interface status and moves config to backup interface on MLAG Peer
+  """ Checks local interface status and moves config to backup interface on MLAG Peer
 
       Args:
           main_port (str): Active port to validate
-          backup_port (str): Port to move config to
-          peer_server (instance): JSON-RPC Object for Peer eAPI Calls
+          backup_port (str): Port to move config to on peer
+          peer_server (instance): JSON-RPC Instance for Peer eAPI Calls
 
   """
   # Grab current port status to ensure it is down
   current_status = local_switch_req.runCmds( 1, ["show interfaces " + main_port + " status"] )
   status = current_status[0]["interfaceStatuses"][main_port]["linkStatus"]
-  # If port is up, check again in two seconds.  If it reamins up, take no action.
+  # If port is up, check again in two seconds.  If it remains up, take no action.
+  # This will trigger on interface up changes, so this will prevent any config changes
+  # as interface comes up from being down.
   if status == "connected":
     syslog.syslog( main_port + " is currently up.  Waiting to check again..." )
     time.sleep(2)
@@ -140,7 +146,7 @@ def enable_fixed_peer(main_port, backup_port, peer_server):
       sys.exit()
   else:
     # If port is down, remove all vlans from trunk and add vlans to backup interface.
-    syslog.syslog( main_port + " is not connected.  Removing Vlans from local interface and adding them to remote." )
+    syslog.syslog( main_port + " is not connected.  Removing Vlans from local interface and adding them to peer " + backup_port )
     disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + main_port, "switchport trunk allowed vlan none", "end"] )
     enable_peer_int = peer_server.runCmds( 1, ["enable", "configure", "interface " + backup_port, "switchport trunk allowed vlan " + vlans, "end"] )
 
@@ -155,7 +161,9 @@ def enable_modular_peer(main_port, backup_port):
   # Grab current port status to ensure it is down
   current_status = local_switch_req.runCmds( 1, ["show interfaces " + main_port + " status"] )
   status = current_status[0]["interfaceStatuses"][main_port]["linkStatus"]
-  # If port is up, check again in two seconds.  If it reamins up, take no action.
+  # If port is up, check again in two seconds.  If it remains up, take no action.
+  # This will trigger on interface up changes, so this will prevent any config changes
+  # as interface comes up from being down.
   if status == "connected":
     syslog.syslog( main_port + " is currently up.  Waiting to check again..." )
     time.sleep(2)
@@ -166,15 +174,16 @@ def enable_modular_peer(main_port, backup_port):
       sys.exit()
   else:
     # If port is down, remove all vlans from trunk and add vlans to backup interface.
-    syslog.syslog( main_port + " is not connected.  Removing Vlans from local interface and adding them to remote." )
+    syslog.syslog( main_port + " is not connected.  Removing Vlans from local interface and adding them to " + backup_port )
     disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + main_port, "switchport trunk allowed vlan none", "end"] )
     enable_peer_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + backup_port, "switchport trunk allowed vlan " + vlans, "end"] )
 
 def main():
-  # Determine mode of device
+  # Determine model of device for chassis / fixed classification
   device_info = local_switch_req.runCmds( 1, ["show version"] )
   device_model = device_info[0]["modelName"]
   if (device_model.startswith("DCS-750")) or (device_model.startswith("DCS-730")):
+    # Current logic assumes downstream device is connected to same port on adjacent slot.
     port_list = switchport.split("/")
     port_slot = int(port_list[0][-1])
     if port_slot % 2 == 0:
@@ -185,14 +194,17 @@ def main():
     try:
       enable_modular_peer(switchport, backup_switchport)
     except:
+      syslog.syslog( "No changes made." )
       sys.exit()
   else:
-    # If device is fixed (nod modular), determine peer IP and JSON-RPC instance.
+    # If device is fixed (not modular), determine peer IP and JSON-RPC instance.
     peer_switch_req = peer_setup()
+    # Current logic assumes downstream device is connected to same port on both peers.
     backup_switchport = switchport
     try:
       enable_fixed_peer(switchport, backup_switchport, peer_switch_req)
     except:
+      syslog.syslog( "No changes made." )
       sys.exit()
 
 if __name__ == '__main__':
