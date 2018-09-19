@@ -174,15 +174,7 @@ def main():
   # Determine mode of device
   device_info = local_switch_req.runCmds( 1, ["show version"] )
   device_model = device_info[0]["modelName"]
-  # If device is fixed, determine peer IP.
-  if device_model.startswith('DCS-7280'):
-    peer_switch_req = peer_setup()
-    backup_switchport = switchport
-    try:
-      enable_fixed_peer(switchport, backup_switchport, peer_switch_req)
-    except:
-      sys.exit()
-  elif device_model.startswith('DCS-750'):
+  if (device_model.startswith("DCS-750")) or (device_model.startswith("DCS-730")):
     port_list = switchport.split("/")
     port_slot = int(port_list[0][-1])
     if port_slot % 2 == 0:
@@ -192,6 +184,14 @@ def main():
     backup_switchport = "Ethernet" + str(backup_slot) + "/" + port_list[1]
     try:
       enable_modular_peer(switchport, backup_switchport)
+    except:
+      sys.exit()
+  else:
+    # If device is fixed (nod modular), determine peer IP and JSON-RPC instance.
+    peer_switch_req = peer_setup()
+    backup_switchport = switchport
+    try:
+      enable_fixed_peer(switchport, backup_switchport, peer_switch_req)
     except:
       sys.exit()
 
