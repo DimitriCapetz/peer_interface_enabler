@@ -107,21 +107,21 @@ def peer_setup():
   peer_url_string = "https://{}:{}@{}/command-api".format(username,password,peer_switch)
   peer_switch_req = Server( peer_url_string )
 
-def enable_peer():
-  current_status = local_switch_req.runCmds( 1, ["show interfaces " + switchport + " status"] )
-  status = current_status[0]["interfaceStatuses"][switchport]["linkStatus"]
+def enable_peer(main_port, backup_port):
+  current_status = local_switch_req.runCmds( 1, ["show interfaces " + main_port + " status"] )
+  status = current_status[0]["interfaceStatuses"][main_port]["linkStatus"]
   if status == "connected":
-    syslog.syslog( switchport + " is currently up.  Waiting to check again..." )
+    syslog.syslog( main_port + " is currently up.  Waiting to check again..." )
     time.sleep(2)
-    updated_status = local_switch_req.runCmds( 1, ["show interfaces " + switchport + " status"] )
-    new_status = updated_status[0]["interfaceStatuses"][switchport]["linkStatus"]
+    updated_status = local_switch_req.runCmds( 1, ["show interfaces " + main_port + " status"] )
+    new_status = updated_status[0]["interfaceStatuses"][main_port]["linkStatus"]
     if new_status == "connected":
-      syslog.syslog( switchport + " is still connected.  Exiting script." )
+      syslog.syslog( main_port + " is still connected.  Exiting script." )
       sys.exit()
   else:
-    syslog.syslog( switchport + " is not connected.  Removing Vlans from local interface and adding them to remote." )
-    disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + switchport, "switchport trunk allowed vlan none", "end"] )
-    enable_peer_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + switchport, "switchport trunk allowed vlan " + vlans, "end"] )
+    syslog.syslog( main_port + " is not connected.  Removing Vlans from local interface and adding them to remote." )
+    disable_local_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + main_port, "switchport trunk allowed vlan none", "end"] )
+    enable_peer_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + backup_port, "switchport trunk allowed vlan " + vlans, "end"] )
 
 def main():
   # Determine mode of device
@@ -130,8 +130,12 @@ def main():
   # If device is fixed, determine peer IP.
   if device_model.startswith('DCS-7280'):
     peer_setup()
+    backup_switchport = switchport
+  elif device_model.startswith('DCS-750'):
+    how do I determine peer port on fixed
+
   try:
-    enable_peer()
+    enable_peer(switchport, backup_switchport)
   except:
     sys.exit()
 
