@@ -1,5 +1,5 @@
 # peer_interface_enabler
-The Peer Interface Enabler tool is used to enable an interface on a peer switch when a local interface status changes.  This is to accomadate attached devices which to not adhere to standard protocols and need active / standby to be managed by the network switch.
+The Peer Interface Enabler tool is used to enable an interface on a peer switch or module when a local interface status changes.  This is to accomadate attached devices which to not adhere to standard protocols and need active / standby to be managed by the network switch.
 
 # Installation
 
@@ -27,6 +27,7 @@ management api http-commands
 event-handler <name>
    trigger on-intf <interface> operstatus
    action bash python /mnt/flash/peer_interface_enabler.py -s <interface> -v <vlan_list>
+   delay 1
 ```
 
 # Compatibility
