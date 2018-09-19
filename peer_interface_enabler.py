@@ -182,16 +182,18 @@ def enable_backup_port(main_port, model):
     new_link_status = new_int_status[0]["interfaceStatuses"][main_port]["linkStatus"]
     if new_link_status == "connected":
       # If primary port is connected, double check to ensure backup is configured.
-      syslog.syslog( "Main port " + main_port + " is still connected.  Verifying backup port " + backup_port + "is up and configured..." )
+      syslog.syslog( "Main port " + main_port + " is still connected.  Verifying backup port " + backup_port + " is up and configured..." )
       backup_int_status = backup_switch_req.runCmds( 1, ["show interfaces " + backup_port + " status"])
       backup_link_status = backup_int_status[0]["interfaceStatuses"][backup_port]["linkStatus"]
       if backup_link_status == "connected":
         # If backup port is up as well, verify backup port has the proper vlans configured and trunked.
         backup_trunk_status = backup_switch_req.runCmds( 1, ["show interfaces " + backup_port + " trunk"] )
         backup_vlan_list = backup_trunk_status[0]["trunks"][backup_port]["allowedVlans"]["vlanIds"]
+        backup_vlan_list.sort()
         # Split supplied vlan list from arg and convert to int and compile in list for comparison.
         main_vlan_list = vlans.split(",")
         main_vlan_list = [ int(vlan) for vlan in main_vlan_list ]
+        main_vlan_list.sort()
         if main_vlan_list == backup_vlan_list:
           syslog.syslog( "Backup port " + backup_port + " is both up and configured with the proper vlans.  Exiting script...")
           sys.exit()
