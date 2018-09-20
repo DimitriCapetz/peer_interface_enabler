@@ -53,7 +53,8 @@
 
    USAGE
 
-      - Script should be configured to trigger with an Event Handler.
+      - Script should be configured to trigger with a pair of Event Handlers.
+      - One is used for downlink detection, the other for dead peer detection.
       - The trigger action should be on the operStatus of the interface
         you are tracking.
       - The script uses passed arguments as indicated below.
@@ -61,9 +62,14 @@
       - Format vlan list in numerical order and individually, ie 2,502,503,606
       - Do not combine vlans in trunk list as a range
       
-           event-handler <name>
-             trigger on-intf <interface> operstatus
-             action bash python /mnt/flash/peer_interface_enabler.py -s <interface> -v <vlan_list>
+           event-handler Downlink_Detect
+             trigger on-intf <downlink> operstatus
+             action bash python /mnt/flash/peer_interface_enabler.py -s <downlink> -v <vlan_list>
+             delay 1
+
+           event-handler Dead_Peer_Detect
+             trigger on-intf <mlag_Peer-link_port-channel> operstatus
+             action bash python /mnt/flash/peer_interface_enabler.py -s <downlink> -v <vlan_list>
              delay 1
 
         
@@ -79,6 +85,7 @@
 
 import argparse
 from jsonrpclib import Server
+import signal
 import sys
 import syslog
 import time
@@ -105,6 +112,15 @@ local_switch_req = Server( local_url_string )
 
 # Open syslog for log creation
 syslog.openlog( 'PeerInterfaceEnabler', 0, syslog.LOG_LOCAL4 )
+
+# Setup timeout function and signal
+def handler(signum, frame):
+  syslog.syslog( "Timed out waiting for peer eAPI." )
+  raise Exception("timeout")
+
+signal.signal(signal.SIGALRM, handler)
+signal.alarm(5)
+
 
 def peer_setup():
   """ Sets up peer JSON-RPC instance based on MLAG Peer IP
