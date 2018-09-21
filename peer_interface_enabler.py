@@ -117,7 +117,7 @@ syslog.openlog('PeerInterfaceEnabler', 0, syslog.LOG_LOCAL4)
 
 # Setup timeout function and signal
 def handler(signum, frame):
-    syslog.syslog("Timed out waiting for peer eAPI.")
+    syslog.syslog("%%PeerInt-6-LOG: Timed out waiting for peer eAPI.")
     raise Exception("timeout")
 
 
