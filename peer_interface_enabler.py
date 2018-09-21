@@ -90,168 +90,185 @@ import sys
 import syslog
 import time
 
-#----------------------------------------------------------------
+# ----------------------------------------------------------------
 # Credential Configuration section
-#----------------------------------------------------------------
+# ----------------------------------------------------------------
 username = 'admin'
 password = 'password'
-#----------------------------------------------------------------
+# ----------------------------------------------------------------
 
 # Pull in interface pair and vlans to configure file from command line argument
 parser = argparse.ArgumentParser(description='Remove Vlans from down interface and apply to peer')
 required_arg = parser.add_argument_group('Required Arguments')
-required_arg.add_argument('-s', '--switchport', dest='switchport', required=True, help='Switchport to apply configuration to', type=str)
+required_arg.add_argument('-s', '--switchport', dest='switchport', required=True,
+                          help='Switchport to apply configuration to', type=str)
 required_arg.add_argument('-v', '--vlans', dest='vlans', required=True, help='Vlans to allow on enabled port', type=str)
 args = parser.parse_args()
 switchport = args.switchport
 vlans = args.vlans
 
 # Define URL for local eAPI connection. Uses local loopback
-local_url_string = "https://{}:{}@{}/command-api".format(username,password,"127.0.0.1")
-local_switch_req = Server( local_url_string )
+local_url_string = "https://{}:{}@{}/command-api".format(username, password, "127.0.0.1")
+local_switch_req = Server(local_url_string)
 
 # Open syslog for log creation
-syslog.openlog( 'PeerInterfaceEnabler', 0, syslog.LOG_LOCAL4 )
+syslog.openlog('PeerInterfaceEnabler', 0, syslog.LOG_LOCAL4)
+
 
 # Setup timeout function and signal
 def handler(signum, frame):
-  syslog.syslog( "Timed out waiting for peer eAPI." )
-  raise Exception("timeout")
+    syslog.syslog("Timed out waiting for peer eAPI.")
+    raise Exception("timeout")
+
 
 signal.signal(signal.SIGALRM, handler)
 signal.alarm(5)
 
 
 def peer_setup():
-  """ Sets up peer JSON-RPC instance based on MLAG Peer IP
+    """ Sets up peer JSON-RPC instance based on MLAG Peer IP
 
-      Args:
-          none
-      
-      Returns:
-          switch_req (instance): JSON-RPC instance for eAPI call to Peer
+        Returns:
+            switch_req (instance): JSON-RPC instance for eAPI call to Peer
 
-  """
-  # Pull MLAG Peer IP for peer switch eAPI connection if fixed device.
-  mlag_status = local_switch_req.runCmds( 1, ["show mlag"] )
-  peer_switch = mlag_status[0]["peerAddress"]
-  peer_url_string = "https://{}:{}@{}/command-api".format(username,password,peer_switch)
-  switch_req = Server( peer_url_string )
-  return switch_req
+    """
+    # Pull MLAG Peer IP for peer switch eAPI connection if fixed device.
+    mlag_status = local_switch_req.runCmds(1, ["show mlag"])
+    peer_switch = mlag_status[0]["peerAddress"]
+    peer_url_string = "https://{}:{}@{}/command-api".format(username, password, peer_switch)
+    switch_req = Server(peer_url_string)
+    return switch_req
+
 
 def config_main_port(backup_port, peer_switch_req):
-  """ Configures main port to be active and removes config from backup
+    """ Configures main port to be active and removes config from backup
 
-      Args:
-          backup_port (str): Port to remove config from
-          peer_switch_req (instance): eAPI instance of backup switch (self on modular)
+        Args:
+            backup_port (str): Port to remove config from
+            peer_switch_req (instance): eAPI instance of backup switch (self on modular)
 
-  """
-  enable_main_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + switchport, "switchport trunk allowed vlan " + vlans, "end"] )
-  disable_backup_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + backup_port, "switchport trunk allowed vlan none", "end"] )
+    """
+    local_switch_req.runCmds(1, ["enable", "configure", "interface " + switchport, 
+                                 "switchport trunk allowed vlan " + vlans, "end"])
+    peer_switch_req.runCmds(1, ["enable", "configure", "interface " + backup_port, 
+                                "switchport trunk allowed vlan none", "end"])
+
 
 def config_backup_port(backup_port, peer_switch_req):
-  """ Configures backup port to be active and removes config from main
+    """ Configures backup port to be active and removes config from main
 
-      Args:
-          backup_port (str): Port to add config to
-          peer_switch_req (instance): eAPI instance of backup switch (self on modular)
+        Args:
+            backup_port (str): Port to add config to
+            peer_switch_req (instance): eAPI instance of backup switch (self on modular)
 
-  """
-  disable_main_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + switchport, "switchport trunk allowed vlan none", "end"] )
-  enable_backup_int = peer_switch_req.runCmds( 1, ["enable", "configure", "interface " + backup_port, "switchport trunk allowed vlan " + vlans, "end"] )
+    """
+    local_switch_req.runCmds(1, ["enable", "configure", "interface " + switchport, 
+                                 "switchport trunk allowed vlan none", "end"])
+    peer_switch_req.runCmds(1, ["enable", "configure", "interface " + backup_port, 
+                                "switchport trunk allowed vlan " + vlans, "end"])
+
 
 def enable_backup_port(main_port, model):
-  """ Checks interface status and moves config to backup interface if necessary
+    """ Checks interface status and moves config to backup interface if necessary
 
-      Args:
-          main_port (str): Active port to validate
-          model (str): model of device being configured
+        Args:
+            main_port (str): Active port to validate
+            model (str): model of device being configured
 
-  """
-  # Determine if device is modular or fixed
-  if (model.startswith("DCS-750")) or (model.startswith("DCS-730")):
-    # Current logic assumes downstream device is connected to same port on adjacent slot.
-    port_list = main_port.split("/")
-    port_slot = int(port_list[0][-1])
-    if port_slot % 2 == 0:
-      backup_slot = port_slot - 1
-    else:
-      backup_slot = port_slot + 1
-    backup_port = "Ethernet" + str(backup_slot) + "/" + port_list[1]
-    backup_switch_req = local_switch_req
-  else:
-    # If device is fixed (not modular), setup peer eAPI instance and backup_port
-    # Assume device is connected to the same port on peer switch
-    backup_port = main_port
-    backup_switch_req = peer_setup()
-  # Grab current port status to ensure it is down
-  main_int_status = local_switch_req.runCmds( 1, ["show interfaces " + main_port + " status"] )
-  main_link_status = main_int_status[0]["interfaceStatuses"][main_port]["linkStatus"]
-  # If port is up, check again in two seconds.  If it remains up, take no action.
-  # This will trigger on interface up changes, so this will prevent any config changes
-  # as interface comes up from being down.
-  if main_link_status == "connected":
-    syslog.syslog( "Main port " + main_port + " is currently up.  Waiting to check again..." )
-    time.sleep(2)
-    new_int_status = local_switch_req.runCmds( 1, ["show interfaces " + main_port + " status"] )
-    new_link_status = new_int_status[0]["interfaceStatuses"][main_port]["linkStatus"]
-    if new_link_status == "connected":
-      # If primary port is connected, double check to ensure backup is configured.
-      syslog.syslog( "Main port " + main_port + " is still connected.  Verifying backup port " + backup_port + " is up and configured..." )
-      try:
-        backup_int_status = backup_switch_req.runCmds( 1, ["show interfaces " + backup_port + " status"])
-        backup_link_status = backup_int_status[0]["interfaceStatuses"][backup_port]["linkStatus"]
-      except:
-        syslog.syslog( "Peer eAPI not reachable.  Assuming peer switch is dead and configuring local interface.")
-        enable_main_int = local_switch_req.runCmds( 1, ["enable", "configure", "interface " + switchport, "switchport trunk allowed vlan " + vlans, "end"] )
-        raise Exception("peer dead")
-      if backup_link_status == "connected":
-        # If backup port is up as well, verify backup port has the proper vlans configured and trunked.
-        backup_trunk_status = backup_switch_req.runCmds( 1, ["show interfaces " + backup_port + " trunk"] )
-        backup_vlan_list = backup_trunk_status[0]["trunks"][backup_port]["allowedVlans"]["vlanIds"]
-        backup_vlan_list.sort()
-        # Split supplied vlan list from arg and convert to int and compile in list for comparison.
-        main_vlan_list = vlans.split(",")
-        main_vlan_list = [ int(vlan) for vlan in main_vlan_list ]
-        main_vlan_list.sort()
-        if main_vlan_list == backup_vlan_list:
-          syslog.syslog( "Backup port " + backup_port + " is both up and configured with the proper vlans.  Exiting script...")
-          sys.exit()
+    """
+    # Determine if device is modular or fixed
+    if (model.startswith("DCS-750")) or (model.startswith("DCS-730")):
+        # Current logic assumes downstream device is connected to same port on adjacent slot.
+        port_list = main_port.split("/")
+        port_slot = int(port_list[0][-1])
+        if port_slot % 2 == 0:
+            backup_slot = port_slot - 1
         else:
-          # If vlan list doesn't match between ports, remove config from backup and add to main.
-          syslog.syslog( "Backup port " + backup_port + " is up but configured with the incorrect vlans.  Assuming misconfig and configuring main port " + main_port )
-          config_main_port(backup_port, backup_switch_req)
-      else:
-        # If main port status is up and backup port is down, ensure configuration is in place on main port.
-        syslog.syslog( "Backup port " + backup_port + " is down.  Configuring vlans on main port " + main_port + " and removing all vlans from backup port " + backup_port )
-        config_main_port(backup_port, backup_switch_req)
+            backup_slot = port_slot + 1
+        backup_port = "Ethernet" + str(backup_slot) + "/" + port_list[1]
+        backup_switch_req = local_switch_req
     else:
-      # If port is NOW down, remove all vlans from trunk and add vlans to backup interface.
-      syslog.syslog( "Main port " + main_port + " is not connected.  Removing Vlans from local interface and adding them to backup port " + backup_port )
-      config_backup_port(backup_port, backup_switch_req)
-  else:
-    # If port is down, remove all vlans from trunk and add vlans to backup interface.
-    syslog.syslog( "Main port " + main_port + " is not connected.  Removing Vlans from local interface and adding them to backup port " + backup_port )
-    config_backup_port(backup_port, backup_switch_req)
+        # If device is fixed (not modular), setup peer eAPI instance and backup_port
+        # Assume device is connected to the same port on peer switch
+        backup_port = main_port
+        backup_switch_req = peer_setup()
+    # Grab current port status to ensure it is down
+    main_int_status = local_switch_req.runCmds(1, ["show interfaces " + main_port + " status"])
+    main_link_status = main_int_status[0]["interfaceStatuses"][main_port]["linkStatus"]
+    # If port is up, check again in two seconds.  If it remains up, take no action.
+    # This will trigger on interface up changes, so this will prevent any config changes
+    # as interface comes up from being down.
+    if main_link_status == "connected":
+        syslog.syslog("%%PeerInt-6-LOG: Main port " + main_port + " is up. Waiting to re-check")
+        time.sleep(2)
+        new_int_status = local_switch_req.runCmds(1, ["show interfaces " + main_port + " status"])
+        new_link_status = new_int_status[0]["interfaceStatuses"][main_port]["linkStatus"]
+        if new_link_status == "connected":
+            # If primary port is connected, double check to ensure backup is configured.
+            syslog.syslog("%%PeerInt-6-LOG: Main port " + main_port + " is still up")
+            syslog.syslog("%%PeerInt-6-LOG: Verifying backup port " + backup_port + " is active")
+            try:
+                backup_int_status = backup_switch_req.runCmds(1, ["show interfaces " + backup_port + " status"])
+                backup_link_status = backup_int_status[0]["interfaceStatuses"][backup_port]["linkStatus"]
+            except:
+                syslog.syslog("%%PeerInt-6-LOG: Peer eAPI not reachable")
+                syslog.syslog("%%PeerInt-6-LOG: Assuming peer is dead and configuring local interface")
+                local_switch_req.runCmds(1, ["enable", "configure", "interface " + switchport, 
+                                             "switchport trunk allowed vlan " + vlans, "end"])
+                raise Exception("peer dead")
+            if backup_link_status == "connected":
+                # If backup port is up as well, verify backup port has the proper vlans configured and trunked.
+                backup_trunk_status = backup_switch_req.runCmds(1, ["show interfaces " + backup_port + " trunk"])
+                backup_vlan_list = backup_trunk_status[0]["trunks"][backup_port]["allowedVlans"]["vlanIds"]
+                backup_vlan_list.sort()
+                # Split supplied vlan list from arg and convert to int and compile in list for comparison.
+                main_vlan_list = vlans.split(",")
+                main_vlan_list = [int(vlan) for vlan in main_vlan_list]
+                main_vlan_list.sort()
+                if main_vlan_list == backup_vlan_list:
+                    syslog.syslog(
+                        "%%PeerInt-6-LOG: Backup port " + backup_port + " is active.  Exiting script")
+                    sys.exit()
+                else:
+                    # If vlan list doesn't match between ports, remove config from backup and add to main.
+                    syslog.syslog("%%PeerInt-6-LOG: Backup port " + backup_port + " is up but misconfigured")
+                    syslog.syslog("%%PeerInt-6-LOG: Configuring main port " + main_port)
+                    config_main_port(backup_port, backup_switch_req)
+            else:
+                # If main port status is up and backup port is down, ensure configuration is in place on main port.
+                syslog.syslog("%%PeerInt-6-LOG: Backup port " + backup_port + " is down")
+                syslog.syslog("%%PeerInt-6-LOG: Configuring main port " + main_port)
+                config_main_port(backup_port, backup_switch_req)
+        else:
+            # If port is NOW down, remove all vlans from trunk and add vlans to backup interface.
+            syslog.syslog("%%PeerInt-6-LOG: Main port " + main_port + " is down")
+            syslog.syslog("%%PeerInt-6-LOG: Removing Vlans and adding them to backup port " + backup_port)
+            config_backup_port(backup_port, backup_switch_req)
+    else:
+        # If port is down, remove all vlans from trunk and add vlans to backup interface.
+        syslog.syslog("%%PeerInt-6-LOG: Main port " + main_port + " is down")
+        syslog.syslog("%%PeerInt-6-LOG: Removing Vlans and adding them to backup port " + backup_port)
+        config_backup_port(backup_port, backup_switch_req)
+
 
 def main():
-  # Determine model of device for chassis / fixed classification
-  try:
-    device_info = local_switch_req.runCmds( 1, ["show version"] )
-    device_model = device_info[0]["modelName"]
-  except:
-    syslog.syslog( "Unable to connect to local eAPI.  Verify eAPI Config.  No changes made.")
-    sys.exit()
-  try:
-    enable_backup_port(switchport, device_model)
-  except Exception as code:
-    code = str(code)
-    if code == "peer dead":
-      syslog.syslog( "Main port " + switchport + " configured because peer was dead.")
-    else:
-      syslog.syslog( "No changes made." )
-      sys.exit()
+    # Determine model of device for chassis / fixed classification
+    try:
+        device_info = local_switch_req.runCmds(1, ["show version"])
+        device_model = device_info[0]["modelName"]
+    except:
+        syslog.syslog("Unable to connect to local eAPI.  Verify eAPI Config.  No changes made.")
+        sys.exit()
+    try:
+        enable_backup_port(switchport, device_model)
+    except Exception as code:
+        code = str(code)
+        if code == "peer dead":
+            syslog.syslog("Main port " + switchport + " configured because peer was dead.")
+        else:
+            syslog.syslog("No changes made.")
+            sys.exit()
+
 
 if __name__ == '__main__':
     main()
