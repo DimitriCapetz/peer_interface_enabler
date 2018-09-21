@@ -35,7 +35,7 @@ event-handler Downlink_Detect
    delay 1
 
 event-handler Dead_Peer_Detect
-   trigger on-intf <mlag_Peer-link_port-channel> operstatus
+   trigger on-intf <mlag_peer-link_port-channel> operstatus
    action bash python /mnt/flash/peer_interface_enabler.py -s <downlink> -v <vlan_list>
    delay 1
 ```
