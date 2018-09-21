@@ -257,16 +257,16 @@ def main():
         device_info = local_switch_req.runCmds(1, ["show version"])
         device_model = device_info[0]["modelName"]
     except:
-        syslog.syslog("Unable to connect to local eAPI.  Verify eAPI Config.  No changes made.")
+        syslog.syslog("%%PeerInt-6-LOG: Unable to connect to local eAPI. No changes made")
         sys.exit()
     try:
         enable_backup_port(switchport, device_model)
     except Exception as code:
         code = str(code)
         if code == "peer dead":
-            syslog.syslog("Main port " + switchport + " configured because peer was dead.")
+            syslog.syslog("%%PeerInt-6-LOG: Main port " + switchport + " configured because peer was dead")
         else:
-            syslog.syslog("No changes made.")
+            syslog.syslog("%%PeerInt-6-LOG: No changes made")
             sys.exit()
 
 
