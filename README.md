@@ -12,7 +12,13 @@ management api http-commands
    no shutdown
 ```
 
-- Change username and password variables at the top of the script to the ones appropriate for your installation.
+- Change username, password and cvp variables at the top of the script to the ones appropriate for your installation.
+
+- If you are using CVP in your environment, you will additionally need to install cvprac on your devices to push config changes back to CVP so they stay in compliance.  Do this by running the following commands.
+```
+bash
+sudo pip install cvprac
+```
          
 # Usage
 - Script should be configured to trigger with a pair of Event Handlers.
