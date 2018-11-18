@@ -39,20 +39,15 @@
      a peer switch or module when a local interface status changes.  This is to 
      accomadate attached devices which to not adhere to standard protocols and need 
      active / standby to be managed by the network switch.
-
    INSTALLATION
      In order to install this script:
        - Copy the script to /mnt/flash
        - Enable the Command API interface:
-
             management api http-commands
               no shutdown
-
        - Change username and  password variables at the top of the script
          to the ones appropriate for your installation. 
-
    USAGE
-
       - Script should be configured to trigger with a pair of Event Handlers.
       - One is used for downlink detection, the other for dead peer detection.
       - The trigger action should be on the operStatus of the interface
@@ -66,16 +61,13 @@
              trigger on-intf <downlink> operstatus
              action bash python /mnt/flash/peer_interface_enabler.py -s <downlink> -v <vlan_list>
              delay 1
-
            event-handler Dead_Peer_Detect
              trigger on-intf <mlag_Peer-link_port-channel> operstatus
              action bash python /mnt/flash/peer_interface_enabler.py -s <downlink> -v <vlan_list>
              delay 1
-
         
    COMPATIBILITY
       This has been tested with EOS 4.20.x using eAPI
-
    LIMITATIONS
       Strict logic is used to determine the backup port to be configured. If the
       environment does not adhere to this logic, the script will need to be 
@@ -84,17 +76,25 @@
 """
 
 import argparse
+from cvprac.cvp_client import CvpClient
+from cvprac.cvp_client_errors import CvpApiError
 from jsonrpclib import Server
 import signal
 import sys
 import syslog
 import time
 
+# Set to allow unverified cert for eAPI call
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
 # ----------------------------------------------------------------
-# Credential Configuration section
+# Configuration section
 # ----------------------------------------------------------------
 username = 'admin'
 password = 'password'
+cvp_bool = True
+cvp_ip = ["10.10.10.10"]
 # ----------------------------------------------------------------
 
 # Pull in interface pair and vlans to configure file from command line argument
@@ -114,6 +114,14 @@ local_switch_req = Server(local_url_string)
 # Open syslog for log creation
 syslog.openlog('PeerInterfaceEnabler', 0, syslog.LOG_LOCAL4)
 
+# Connect to CVP for configlet push if necessary
+if cvp_bool == True:
+    try:
+        cvp = CvpClient(syslog=True, filename='cvprac_log')
+        cvp.connect(cvp_ip, username, password)
+    except:
+        syslog.syslog("%%PeerInt-6-LOG: Unable to connect to CVP. Continuing script")
+        pass
 
 # Setup timeout function and signal
 def handler(signum, frame):
@@ -127,10 +135,8 @@ signal.alarm(5)
 
 def peer_setup():
     """ Sets up peer JSON-RPC instance based on MLAG Peer IP
-
         Returns:
             switch_req (instance): JSON-RPC instance for eAPI call to Peer
-
     """
     # Pull MLAG Peer IP for peer switch eAPI connection if fixed device.
     mlag_status = local_switch_req.runCmds(1, ["show mlag"])
@@ -142,11 +148,9 @@ def peer_setup():
 
 def config_main_port(backup_port, peer_switch_req):
     """ Configures main port to be active and removes config from backup
-
         Args:
             backup_port (str): Port to remove config from
             peer_switch_req (instance): eAPI instance of backup switch (self on modular)
-
     """
     local_switch_req.runCmds(1, ["enable", "configure", "interface " + switchport, 
                                  "switchport trunk allowed vlan " + vlans, "end"])
@@ -156,26 +160,59 @@ def config_main_port(backup_port, peer_switch_req):
 
 def config_backup_port(backup_port, peer_switch_req):
     """ Configures backup port to be active and removes config from main
-
         Args:
             backup_port (str): Port to add config to
             peer_switch_req (instance): eAPI instance of backup switch (self on modular)
-
     """
     local_switch_req.runCmds(1, ["enable", "configure", "interface " + switchport, 
                                  "switchport trunk allowed vlan none", "end"])
     peer_switch_req.runCmds(1, ["enable", "configure", "interface " + backup_port, 
                                 "switchport trunk allowed vlan " + vlans, "end"])
 
+def main_cvp_update(backup_port, main_host, backup_host):
+    """ Updates CVP Configlets to make main port active for compliance reasons
+        Args:
+            backup_port (str): Port to remove config from
+            main_host (str): Hostname of main device
+            backup_host (str): Hostname of backup device
+    """
+    main_configlet = "interface " + switchport + "\n   switchport trunk allowed vlan " + vlans
+    backup_configlet = "interface " + backup_port + "\n   switchport trunk allowed vlan none"
+    main_configlet_data = cvp.api.get_configlet_by_name(main_host + ' ' + switchport)
+    backup_configlet_data = cvp.api.get_configlet_by_name(backup_host + ' ' + backup_port)
+    try:
+        cvp.api.update_configlet(main_configlet, main_configlet_data['key'], main_host + ' ' + switchport)
+        cvp.api.update_configlet(backup_configlet, backup_configlet_data['key'], backup_host + ' ' + backup_port)
+    except:
+        pass
+
+def backup_cvp_update(backup_port, main_host, backup_host):
+    """ Updates CVP Configlets to make backup port active for compliance reasons
+        Args:
+            backup_port (str): Port to remove config from
+            main_host (str): Hostname of main device
+            backup_host (str): Hostname of backup device
+    """
+    main_configlet = "interface " + switchport + "\n   switchport trunk allowed vlan none"
+    backup_configlet = "interface " + backup_port + "\n   switchport trunk allowed vlan " + vlans
+    main_configlet_data = cvp.api.get_configlet_by_name(main_host + ' ' + switchport)
+    backup_configlet_data = cvp.api.get_configlet_by_name(backup_host + ' ' + backup_port)
+    try:
+        cvp.api.update_configlet(main_configlet, main_configlet_data['key'], main_host + ' ' + switchport)
+        cvp.api.update_configlet(backup_configlet, backup_configlet_data['key'], backup_host + ' ' + backup_port)
+    except:
+        pass
 
 def enable_backup_port(main_port, model):
     """ Checks interface status and moves config to backup interface if necessary
-
         Args:
             main_port (str): Active port to validate
             model (str): model of device being configured
-
     """
+    # Run hostname check on self for use in CVP
+    if cvp_bool == True:
+        main_hostname_res = local_switch_req.runCmds(1, ["show hostname"])
+        main_hostname = main_hostname_res[0]["hostname"]
     # Determine if device is modular or fixed
     if (model.startswith("DCS-750")) or (model.startswith("DCS-730")):
         # Current logic assumes downstream device is connected to same port on adjacent slot.
@@ -187,11 +224,16 @@ def enable_backup_port(main_port, model):
             backup_slot = port_slot + 1
         backup_port = "Ethernet" + str(backup_slot) + "/" + port_list[1]
         backup_switch_req = local_switch_req
+        if cvp_bool == True:
+            backup_hostname = main_hostname
     else:
         # If device is fixed (not modular), setup peer eAPI instance and backup_port
         # Assume device is connected to the same port on peer switch
         backup_port = main_port
         backup_switch_req = peer_setup()
+        if cvp_bool == True:
+            backup_hostname_res = backup_switch_req.runCmds(1, ["show hostname"])
+            backup_hostname = backup_hostname_res[0]["hostname"]
     # Grab current port status to ensure it is down
     main_int_status = local_switch_req.runCmds(1, ["show interfaces " + main_port + " status"])
     main_link_status = main_int_status[0]["interfaceStatuses"][main_port]["linkStatus"]
@@ -234,21 +276,38 @@ def enable_backup_port(main_port, model):
                     syslog.syslog("%%PeerInt-6-LOG: Backup port " + backup_port + " is up but misconfigured")
                     syslog.syslog("%%PeerInt-6-LOG: Configuring main port " + main_port)
                     config_main_port(backup_port, backup_switch_req)
+                    # Push config changes to CVP if in use
+                    if cvp_bool == True:
+                        syslog.syslog("%%PeerInt-6-LOG: Pushing changes to CVP")
+                        main_cvp_update(backup_port, main_hostname, backup_hostname)
+                    
             else:
                 # If main port status is up and backup port is down, ensure configuration is in place on main port.
                 syslog.syslog("%%PeerInt-6-LOG: Backup port " + backup_port + " is down")
                 syslog.syslog("%%PeerInt-6-LOG: Configuring main port " + main_port)
                 config_main_port(backup_port, backup_switch_req)
+                # Push config changes to CVP if in use
+                if cvp_bool == True:
+                    syslog.syslog("%%PeerInt-6-LOG: Pushing changes to CVP")
+                    main_cvp_update(backup_port, main_hostname, backup_hostname)
         else:
             # If port is NOW down, remove all vlans from trunk and add vlans to backup interface.
             syslog.syslog("%%PeerInt-6-LOG: Main port " + main_port + " is down")
             syslog.syslog("%%PeerInt-6-LOG: Removing Vlans and adding them to backup port " + backup_port)
             config_backup_port(backup_port, backup_switch_req)
+            # Push config changes to CVP if in use
+            if cvp_bool == True:
+                syslog.syslog("%%PeerInt-6-LOG: Pushing changes to CVP")
+                backup_cvp_update(backup_port, main_hostname, backup_hostname)
     else:
         # If port is down, remove all vlans from trunk and add vlans to backup interface.
         syslog.syslog("%%PeerInt-6-LOG: Main port " + main_port + " is down")
         syslog.syslog("%%PeerInt-6-LOG: Removing Vlans and adding them to backup port " + backup_port)
         config_backup_port(backup_port, backup_switch_req)
+        # Push config changes to CVP if in use
+        if cvp_bool == True:
+            syslog.syslog("%%PeerInt-6-LOG: Pushing changes to CVP")
+            backup_cvp_update(backup_port, main_hostname, backup_hostname)
 
 
 def main():
@@ -265,6 +324,7 @@ def main():
         code = str(code)
         if code == "peer dead":
             syslog.syslog("%%PeerInt-6-LOG: Main port " + switchport + " configured because peer was dead")
+            syslog.syslog("%%PeerInt-6-LOG: If CVP is in use, these changes were not pushed")
         else:
             syslog.syslog("%%PeerInt-6-LOG: No changes made")
             sys.exit()
