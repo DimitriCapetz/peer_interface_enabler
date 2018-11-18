@@ -76,8 +76,6 @@
 """
 
 import argparse
-from cvprac.cvp_client import CvpClient
-from cvprac.cvp_client_errors import CvpApiError
 from jsonrpclib import Server
 import signal
 import sys
@@ -116,6 +114,8 @@ syslog.openlog('PeerInterfaceEnabler', 0, syslog.LOG_LOCAL4)
 
 # Connect to CVP for configlet push if necessary
 if cvp_bool == True:
+    from cvprac.cvp_client import CvpClient
+    from cvprac.cvp_client_errors import CvpApiError
     try:
         cvp = CvpClient(syslog=True, filename='cvprac_log')
         cvp.connect(cvp_ip, username, password)
