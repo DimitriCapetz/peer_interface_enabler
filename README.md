@@ -1,5 +1,5 @@
 # peer_interface_enabler
-The Peer Interface Enabler tool is used to enable an interface on a peer switch or module when a local interface status changes.  This is to accomadate attached devices which to not adhere to standard protocols and need active / standby to be managed by the network switch.
+The Peer Interface Enabler tool is used to enable an interface on a peer switch or module when a local interface status changes.  This is done by modifying trunk allowed vlan lists to ensure only one is forwarding at L2. This is to accomadate attached devices which to not adhere to standard protocols and need active / standby to be managed by the network switch.
 
 # Installation
 
@@ -12,15 +12,25 @@ management api http-commands
    no shutdown
 ```
 
-- Change username, password and cvp variables at the top of the script to the ones appropriate for your installation.
+- Note: If you are using multiple VRFs, the eAPI must be enabled in the default VRF explicitly.
 
-- If you are using CVP in your environment, you will additionally need to install cvprac on your devices to push config changes back to CVP so they stay in compliance.  Do this by running the following commands.
-```
-bash
-sudo pip install cvprac
-```
+- Change username, password at the top of the script to the ones appropriate for your installation.
          
 # Usage
+- To begin, candidate interfaces should be preconfigured in active / standby setup, like below.  One is allowing all vlans, the other allows none.
+
+ACTIVE INTERFACE
+```
+        interface Ethernet1
+           switchport trunk allowed vlan 2,502,503,606
+           switchport mode trunk
+```
+STANDBY INTERFACE
+```
+        interface Ethernet1
+           switchport trunk allowed vlan none
+           switchport mode trunk
+```
 - Script should be configured to trigger with a pair of Event Handlers.
 
 - One is used for downlink detection, the other for dead peer detection.
@@ -48,8 +58,8 @@ event-handler Dead_Peer_Detect
 
 # Compatibility
 
-This has been tested with EOS 4.20.x using eAPI
+This has been tested with EOS 4.28.1F using eAPI
 
 # Limitations
 
-Strict logic is used to determine the backup port to be configured. If the environment does not adhere to this logic, the script will need to be adjusted.  Please note that failover time can be affected by STP convergeance.  If there are no L2 loops, STP can be disabled on vlans to speed failover time.
+Strict logic is used to determine the backup port to be configured. In this case, the backup port and primary port must have the same interface ID (i.e. Ethernet1 on both devices).  Peer addressing is identified using MLAG only.  If MLAG is not in use, the script will need to be adjusted.  If the environment does not adhere to this logic, the script will need to be adjusted.  Please note that failover time can be affected by STP convergeance.  If there are no L2 loops, STP can be disabled on vlans to speed failover time.
