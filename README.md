@@ -56,6 +56,20 @@ event-handler Dead_Peer_Detect
    delay 1
 ```
 
+For example...
+
+```
+event-handler Downlink_Detect
+  trigger on-intf Ethernet1 operstatus
+  action bash python /mnt/flash/peer_interface_enabler.py -s Ethernet1 -v 2,502,503,606
+  delay 1
+!
+event-handler Dead_Peer_Detect
+  trigger on-intf Port-Channel2000 operstatus
+  action bash python /mnt/flash/peer_interface_enabler.py -s Ethernet1 -v 2,502,503,606
+  delay 1
+```
+
 # Compatibility
 
 This has been tested with EOS 4.28.1F using eAPI
